@@ -1,140 +1,251 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Soenneker.Extensions.String;
 using Soenneker.Git.Util.Abstract;
-using Soenneker.Utils.Directory.Abstract;
-using Soenneker.Utils.Dotnet.Abstract;
-using Soenneker.Utils.Dotnet.NuGet.Abstract;
-using Soenneker.Utils.Environment;
-using Soenneker.Utils.File.Abstract;
-using Soenneker.Utils.SHA3.Abstract;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
+using Soenneker.Utils.Directory.Abstract;
+using Soenneker.Utils.File.Abstract;
+using Soenneker.Utils.PooledStringBuilders;
+using Soenneker.Utils.Process.Abstract;
 
 namespace Soenneker.SimpleIcons.Runners.Enums.Icons.Utils;
 
 ///<inheritdoc cref="IFileOperationsUtil"/>
 public sealed class FileOperationsUtil : IFileOperationsUtil
 {
+    private const string CSharpKeywordSuffix = "Icon";
+    private const string LeadingDigitPrefix = "Icon";
+
+    private static readonly HashSet<string> CSharpKeywords = new(StringComparer.Ordinal)
+    {
+        "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "const", "continue", "decimal",
+        "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float",
+        "for", "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new",
+        "null", "object", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "ref", "return",
+        "sbyte", "sealed", "short", "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true", "try",
+        "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while"
+    };
+
     private readonly ILogger<FileOperationsUtil> _logger;
-    private readonly IGitUtil _gitUtil;
-    private readonly IDotnetUtil _dotnetUtil;
-    private readonly IDotnetNuGetUtil _dotnetNuGetUtil;
     private readonly IFileUtil _fileUtil;
     private readonly IDirectoryUtil _directoryUtil;
-    private readonly IBlake3Util _blake3Util;
+    private readonly IGitUtil _gitUtil;
+    private readonly IProcessUtil _processUtil;
 
-    private string? _newHash;
-
-    public FileOperationsUtil(IFileUtil fileUtil, ILogger<FileOperationsUtil> logger, IGitUtil gitUtil, IDotnetUtil dotnetUtil,
-        IDotnetNuGetUtil dotnetNuGetUtil, IDirectoryUtil directoryUtil, IBlake3Util blake3Util)
+    public FileOperationsUtil(ILogger<FileOperationsUtil> logger, IFileUtil fileUtil, IDirectoryUtil directoryUtil, IGitUtil gitUtil, IProcessUtil processUtil)
     {
-        _fileUtil = fileUtil;
         _logger = logger;
-        _gitUtil = gitUtil;
-        _dotnetUtil = dotnetUtil;
-        _dotnetNuGetUtil = dotnetNuGetUtil;
+        _fileUtil = fileUtil;
         _directoryUtil = directoryUtil;
-        _blake3Util = blake3Util;
+        _gitUtil = gitUtil;
+        _processUtil = processUtil;
     }
 
     public async ValueTask Process(CancellationToken cancellationToken)
     {
-        string gitDirectory = await _gitUtil.CloneToTempDirectory($"https://github.com/soenneker/{Constants.Library.ToLowerInvariantFast()}",
-            cancellationToken: cancellationToken);
+        string workingDirectory = await _directoryUtil.CreateTempDirectory(cancellationToken);
+        string upstreamDirectory = Path.Combine(workingDirectory, "simple-icons");
+        string targetDirectory = Path.Combine(workingDirectory, Constants.TargetRepository);
 
-        string targetExePath = Path.Combine(gitDirectory, "src", "Resources", Constants.FileName);
+        try
+        {
+            await _gitUtil.Clone(Constants.UpstreamRepositoryUrl, upstreamDirectory, shallow: true, cancellationToken: cancellationToken);
+            string upstreamCommit = (await _gitUtil.Run("rev-parse HEAD", upstreamDirectory, cancellationToken: cancellationToken))[0].Trim();
 
-        bool needToUpdate = await CheckForHashDifferences(gitDirectory, filePath, cancellationToken);
+            string generatedEnum = await GenerateEnum(upstreamDirectory, cancellationToken);
 
-        if (!needToUpdate)
+            await _gitUtil.Clone($"https://github.com/soenneker/{Constants.TargetRepository}.git", targetDirectory, shallow: true, cancellationToken: cancellationToken);
+
+            string enumPath = Path.Combine(targetDirectory, "src", Constants.Library, Constants.EnumFileName);
+            string? existingEnum = await _fileUtil.TryRead(enumPath, cancellationToken: cancellationToken);
+
+            if (StringComparer.Ordinal.Equals(existingEnum, generatedEnum))
+            {
+                _logger.LogInformation("SimpleIcons enum is already current at upstream commit {UpstreamCommit}", upstreamCommit);
+                return;
+            }
+
+            await _fileUtil.Write(enumPath, generatedEnum, cancellationToken: cancellationToken);
+
+            string projectPath = Path.Combine(targetDirectory, "src", Constants.Library, $"{Constants.Library}.csproj");
+
+            await RunProcess("dotnet", BuildArguments("restore", projectPath, "--verbosity", "minimal"), targetDirectory, cancellationToken);
+            await RunProcess("dotnet", BuildArguments("build", projectPath, "--configuration", "Release", "--no-restore", "--verbosity", "minimal"), targetDirectory,
+                cancellationToken);
+
+            string version = GetRequiredEnvironmentVariable("BUILD_VERSION");
+            await RunProcess("dotnet",
+                BuildArguments("pack", projectPath, "--configuration", "Release", "--no-build", "--no-restore", "--output", targetDirectory,
+                    $"/p:PackageVersion={version}", "--verbosity", "minimal"), targetDirectory, cancellationToken);
+
+            string packagePath = Path.Combine(targetDirectory, $"{Constants.Library}.{version}.nupkg");
+            string apiKey = GetRequiredEnvironmentVariable("NUGET__TOKEN");
+            await RunProcess("dotnet", BuildArguments("nuget", "push", packagePath, "--api-key", apiKey, "--source", "https://api.nuget.org/v3/index.json", "--skip-duplicate"),
+                targetDirectory, cancellationToken);
+
+            await CommitAndPush(targetDirectory, upstreamCommit, cancellationToken);
+
+            _logger.LogInformation("Updated {Library} from simple-icons/simple-icons commit {UpstreamCommit}", Constants.Library, upstreamCommit);
+        }
+        finally
+        {
+            await _directoryUtil.DeleteIfExists(workingDirectory, cancellationToken);
+        }
+    }
+
+    private async ValueTask<string> GenerateEnum(string upstreamDirectory, CancellationToken cancellationToken)
+    {
+        string iconsDirectory = Path.Combine(upstreamDirectory, "icons");
+
+        List<string> iconFiles = await _directoryUtil.GetFilesByExtension(iconsDirectory, ".svg", cancellationToken: cancellationToken);
+        var memberNames = new HashSet<string>(StringComparer.Ordinal);
+
+        string[] enumMembers = iconFiles.Select(Path.GetFileNameWithoutExtension)
+                                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                                        .Select(name => name!)
+                                        .OrderBy(name => name, StringComparer.Ordinal)
+                                        .Select(ToEnumMemberName)
+                                        .Select(memberName =>
+                                        {
+                                            if (!memberNames.Add(memberName))
+                                                throw new InvalidOperationException($"Duplicate enum member generated: {memberName}");
+
+                                            return memberName;
+                                        })
+                                        .ToArray();
+
+        using var builder = new PooledStringBuilder();
+        builder.Append("namespace Soenneker.SimpleIcons.Enums.Icons;\n");
+        builder.Append('\n');
+        builder.Append("public enum SimpleIcon\n");
+        builder.Append("{\n");
+
+        for (var i = 0; i < enumMembers.Length; i++)
+        {
+            builder.Append("    ");
+            builder.Append(enumMembers[i]);
+
+            if (i < enumMembers.Length - 1)
+                builder.Append(',');
+
+            builder.Append('\n');
+        }
+
+        builder.Append("}\n");
+
+        return builder.ToString();
+    }
+
+    private static string ToEnumMemberName(string iconName)
+    {
+        using var builder = new PooledStringBuilder(iconName.Length + LeadingDigitPrefix.Length);
+        var capitalizeNextLetter = true;
+
+        foreach (char character in iconName)
+        {
+            if (!char.IsLetterOrDigit(character))
+            {
+                capitalizeNextLetter = true;
+                continue;
+            }
+
+            if (builder.Length == 0 && char.IsDigit(character))
+                builder.Append(LeadingDigitPrefix);
+
+            if (char.IsDigit(character))
+            {
+                builder.Append(character);
+                capitalizeNextLetter = true;
+                continue;
+            }
+
+            builder.Append(capitalizeNextLetter ? char.ToUpperInvariant(character) : char.ToLowerInvariant(character));
+            capitalizeNextLetter = false;
+        }
+
+        string memberName = builder.Length == 0 ? LeadingDigitPrefix : builder.ToString();
+
+        if (CSharpKeywords.Contains(iconName))
+            memberName += CSharpKeywordSuffix;
+
+        return memberName;
+    }
+
+    private async ValueTask CommitAndPush(string targetDirectory, string upstreamCommit, CancellationToken cancellationToken)
+    {
+        if (!await _gitUtil.HasWorkingTreeChanges(targetDirectory, cancellationToken))
             return;
 
-        await BuildPackAndPush(gitDirectory, targetExePath, filePath, cancellationToken);
+        string name = GetRequiredEnvironmentVariable("GIT__NAME");
+        string email = GetRequiredEnvironmentVariable("GIT__EMAIL");
+        string token = GetRequiredEnvironmentVariable("GH__TOKEN");
 
-        await SaveHashToGitRepo(gitDirectory, cancellationToken);
+        await _gitUtil.CommitAndPush(targetDirectory, $"Update SimpleIcons enum from upstream {upstreamCommit[..12]}", token, name, email, cancellationToken);
     }
 
-    private async ValueTask BuildPackAndPush(string gitDirectory, string targetExePath, string filePath, CancellationToken cancellationToken)
+    private static string GetRequiredEnvironmentVariable(string name)
     {
-        await _fileUtil.DeleteIfExists(targetExePath, cancellationToken: cancellationToken);
+        string? value = Environment.GetEnvironmentVariable(name);
 
-        await _directoryUtil.CreateIfDoesNotExist(Path.Combine(gitDirectory, "src", "Resources"), cancellationToken: cancellationToken);
+        if (string.IsNullOrWhiteSpace(value))
+            throw new InvalidOperationException($"{name} is not set");
 
-        await _fileUtil.Move(filePath, targetExePath, cancellationToken: cancellationToken);
+        return value;
+    }
 
-        string projFilePath = Path.Combine(gitDirectory, "src", Constants.Library, $"{Constants.Library}.csproj");
+    private ValueTask<string> RunProcess(string fileName, string arguments, string workingDirectory, CancellationToken cancellationToken)
+    {
+        return _processUtil.StartAndGetOutput(fileName, arguments, workingDirectory, cancellationToken: cancellationToken);
+    }
 
-        await _dotnetUtil.Restore(projFilePath, cancellationToken: cancellationToken);
+    private static string BuildArguments(params string[] arguments)
+    {
+        using var builder = new PooledStringBuilder();
 
-        bool successful = await _dotnetUtil.Build(projFilePath, true, "Release", false, cancellationToken: cancellationToken);
-
-        if (!successful)
+        foreach (string argument in arguments)
         {
-            _logger.LogError("Build was not successful, exiting...");
+            if (builder.Length > 0)
+                builder.Append(' ');
+
+            AppendEscapedArgument(builder, argument);
+        }
+
+        return builder.ToString();
+    }
+
+    private static void AppendEscapedArgument(PooledStringBuilder builder, string argument)
+    {
+        if (!RequiresQuotes(argument))
+        {
+            builder.Append(argument);
             return;
         }
 
-        string version = EnvironmentUtil.GetVariableStrict("BUILD_VERSION");
+        builder.Append('"');
 
-        await _dotnetUtil.Pack(projFilePath, version, true, "Release", false, false, gitDirectory, cancellationToken: cancellationToken);
+        foreach (char character in argument)
+        {
+            if (character is '"' or '\\')
+                builder.Append('\\');
 
-        string apiKey = EnvironmentUtil.GetVariableStrict("NUGET__TOKEN");
+            builder.Append(character);
+        }
 
-        string nuGetPackagePath = Path.Combine(gitDirectory, $"{Constants.Library}.{version}.nupkg");
-
-        await _dotnetNuGetUtil.Push(nuGetPackagePath, apiKey: apiKey, cancellationToken: cancellationToken);
+        builder.Append('"');
     }
 
-    private async ValueTask<bool> CheckForHashDifferences(string gitDirectory, string filePath, CancellationToken cancellationToken)
+    private static bool RequiresQuotes(string argument)
     {
-        string? oldHash = await _fileUtil.TryRead(Path.Combine(gitDirectory, "hash.txt"), true, cancellationToken);
-
-        if (oldHash == null)
+        foreach (char character in argument)
         {
-            _logger.LogDebug("Could not read hash from repository, proceeding to update...");
-            return true;
+            if (char.IsWhiteSpace(character) || character is '"')
+                return true;
         }
 
-        _newHash = await _blake3Util.HashFile(filePath, cancellationToken);
-
-        if (oldHash == _newHash)
-        {
-            _logger.LogInformation("Hashes are equal, no need to update, exiting...");
-            return false;
-        }
-
-        return true;
-    }
-
-    private async ValueTask SaveHashToGitRepo(string gitDirectory, CancellationToken cancellationToken)
-    {
-        string targetHashFile = Path.Combine(gitDirectory, "hash.txt");
-
-        await _fileUtil.DeleteIfExists(targetHashFile, cancellationToken: cancellationToken);
-
-        await _fileUtil.Write(targetHashFile, _newHash!, true, cancellationToken);
-
-        await _fileUtil.DeleteIfExists(Path.Combine(gitDirectory, "src", "Resources", Constants.FileName), cancellationToken: cancellationToken);
-
-        await _gitUtil.AddIfNotExists(gitDirectory, targetHashFile, cancellationToken);
-
-        if (await _gitUtil.IsRepositoryDirty(gitDirectory, cancellationToken))
-        {
-            _logger.LogInformation("Changes have been detected in the repository, commiting and pushing...");
-
-            string name = EnvironmentUtil.GetVariableStrict("GIT__NAME");
-            string email = EnvironmentUtil.GetVariableStrict("GIT__EMAIL");
-            string token = EnvironmentUtil.GetVariableStrict("GH__TOKEN");
-
-            await _gitUtil.Commit(gitDirectory, "Updates hash for new version", name, email, cancellationToken);
-
-            await _gitUtil.Push(gitDirectory, token, cancellationToken);
-        }
-        else
-        {
-            _logger.LogInformation("There are no changes to commit");
-        }
+        return argument.Length == 0;
     }
 }

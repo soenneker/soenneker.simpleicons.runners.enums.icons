@@ -1,4 +1,5 @@
-using Soenneker.SimpleIcons.Runners.Enums.Icons.Abstract;
+using System;
+using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
 using Soenneker.Tests.HostedUnit;
 
 namespace Soenneker.SimpleIcons.Runners.Enums.Icons.Tests;
@@ -6,16 +7,17 @@ namespace Soenneker.SimpleIcons.Runners.Enums.Icons.Tests;
 [ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
 public sealed class SimpleIconsIconsEnumRunnerTests : HostedUnitTest
 {
-    private readonly ISimpleIconsIconsEnumRunner _runner;
+    private readonly IFileOperationsUtil _fileOperationsUtil;
 
     public SimpleIconsIconsEnumRunnerTests(Host host) : base(host)
     {
-        _runner = Resolve<ISimpleIconsIconsEnumRunner>(true);
+        _fileOperationsUtil = Resolve<IFileOperationsUtil>(true);
     }
 
     [Test]
     public void Default()
     {
-
+        if (_fileOperationsUtil is null)
+            throw new InvalidOperationException("Could not resolve file operations util");
     }
 }
