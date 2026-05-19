@@ -3,8 +3,9 @@ using Soenneker.Git.Util.Registrars;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
 using Soenneker.Utils.Directory.Registrars;
+using Soenneker.Utils.Dotnet.Registrars;
+using Soenneker.Utils.Dotnet.NuGet.Registrars;
 using Soenneker.Utils.File.Registrars;
-using Soenneker.Utils.Process.Registrars;
 
 namespace Soenneker.SimpleIcons.Runners.Enums.Icons;
 
@@ -24,9 +25,10 @@ public static class Startup
         services.AddHostedService<ConsoleHostedService>()
                 .AddSingleton<IFileOperationsUtil, FileOperationsUtil>()
                 .AddDirectoryUtilAsSingleton()
+                .AddDotnetUtilAsSingleton()
+                .AddDotnetNuGetUtilAsSingleton()
                 .AddFileUtilAsSingleton()
-                .AddGitUtilAsSingleton()
-                .AddProcessUtilAsSingleton();
+                .AddGitUtilAsSingleton();
 
         return services;
     }
