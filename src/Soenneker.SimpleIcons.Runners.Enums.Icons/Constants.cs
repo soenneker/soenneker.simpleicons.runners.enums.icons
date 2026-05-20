@@ -6,5 +6,5 @@ public static class Constants
     public const string UpstreamRepositoryUrl = "https://github.com/simple-icons/simple-icons.git";
     public const string Library = "Soenneker.SimpleIcons.Enums.Icons";
     public const string EnumFileName = "SimpleIcon.cs";
-    public const string EnumTypeName = "SimpleIcon";
+    public const string EnumTypeName = "SimpleIconEnum";
 }
