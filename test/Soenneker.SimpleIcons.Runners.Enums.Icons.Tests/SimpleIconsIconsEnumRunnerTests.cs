@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
 using Soenneker.Tests.HostedUnit;
 
@@ -19,5 +20,12 @@ public sealed class SimpleIconsIconsEnumRunnerTests : HostedUnitTest
     {
         if (_fileOperationsUtil is null)
             throw new InvalidOperationException("Could not resolve file operations util");
+    }
+
+    [Test]
+    public async Task Enum_type_name_is_simple_icon()
+    {
+        await Assert.That(Constants.EnumTypeName).IsEqualTo("SimpleIcon");
+        await Assert.That(Constants.EnumTypeName).IsNotEqualTo("SimpleIconEnum");
     }
 }

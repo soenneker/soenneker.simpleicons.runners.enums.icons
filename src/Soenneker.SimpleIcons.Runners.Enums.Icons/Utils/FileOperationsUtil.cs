@@ -115,7 +115,9 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         using var builder = new PooledStringBuilder();
         builder.Append("namespace Soenneker.SimpleIcons.Enums.Icons;\n");
         builder.Append('\n');
-        builder.Append("public enum SimpleIcon\n");
+        builder.Append("public enum ");
+        builder.Append(Constants.EnumTypeName);
+        builder.Append('\n');
         builder.Append("{\n");
 
         for (var i = 0; i < enumMembers.Length; i++)
