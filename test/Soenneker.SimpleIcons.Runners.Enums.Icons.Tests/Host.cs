@@ -10,7 +10,6 @@ using Soenneker.TestHosts.Unit;
 using Soenneker.Utils.Test;
 using Soenneker.Utils.Directory.Registrars;
 using Soenneker.Utils.Dotnet.Registrars;
-using Soenneker.Utils.Dotnet.NuGet.Registrars;
 using Soenneker.Utils.File.Registrars;
 
 namespace Soenneker.SimpleIcons.Runners.Enums.Icons.Tests;
@@ -47,7 +46,6 @@ public sealed class Host : UnitTestHost
         services.AddSingleton<IFileOperationsUtil, FileOperationsUtil>()
                 .AddDirectoryUtilAsSingleton()
                 .AddDotnetUtilAsSingleton()
-                .AddDotnetNuGetUtilAsSingleton()
                 .AddFileUtilAsSingleton()
                 .AddGitUtilAsSingleton();
     }

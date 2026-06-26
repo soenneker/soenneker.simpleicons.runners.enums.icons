@@ -10,7 +10,6 @@ using Soenneker.Hashing.XxHash;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
 using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.Dotnet.Abstract;
-using Soenneker.Utils.Dotnet.NuGet.Abstract;
 using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.PooledStringBuilders;
 
@@ -38,17 +37,14 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
     private readonly IDirectoryUtil _directoryUtil;
     private readonly IGitUtil _gitUtil;
     private readonly IDotnetUtil _dotnetUtil;
-    private readonly IDotnetNuGetUtil _dotnetNuGetUtil;
 
-    public FileOperationsUtil(ILogger<FileOperationsUtil> logger, IFileUtil fileUtil, IDirectoryUtil directoryUtil, IGitUtil gitUtil, IDotnetUtil dotnetUtil,
-        IDotnetNuGetUtil dotnetNuGetUtil)
+    public FileOperationsUtil(ILogger<FileOperationsUtil> logger, IFileUtil fileUtil, IDirectoryUtil directoryUtil, IGitUtil gitUtil, IDotnetUtil dotnetUtil)
     {
         _logger = logger;
         _fileUtil = fileUtil;
         _directoryUtil = directoryUtil;
         _gitUtil = gitUtil;
         _dotnetUtil = dotnetUtil;
-        _dotnetNuGetUtil = dotnetNuGetUtil;
     }
 
     public async ValueTask Process(CancellationToken cancellationToken)
@@ -78,7 +74,7 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
 
             string projectPath = Path.Combine(targetDirectory, "src", Constants.Library, $"{Constants.Library}.csproj");
 
-            await RestoreBuildPackAndPush(projectPath, targetDirectory, cancellationToken);
+            await RestoreAndBuild(projectPath, cancellationToken);
 
             await CommitAndPush(targetDirectory, upstreamCommit, cancellationToken);
 
@@ -214,7 +210,7 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         await _gitUtil.CommitAndPush(targetDirectory, $"Update SimpleIcons enum from upstream {upstreamCommit[..12]}", token, name, email, cancellationToken);
     }
 
-    private async ValueTask RestoreBuildPackAndPush(string projectPath, string targetDirectory, CancellationToken cancellationToken)
+    private async ValueTask RestoreAndBuild(string projectPath, CancellationToken cancellationToken)
     {
         await _dotnetUtil.Restore(projectPath, verbosity: "minimal", cancellationToken: cancellationToken);
 
@@ -222,14 +218,6 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
 
         if (!successful)
             throw new InvalidOperationException($"{Constants.Library} build failed");
-
-        string version = GetRequiredEnvironmentVariable("BUILD_VERSION");
-        await _dotnetUtil.Pack(projectPath, version, configuration: "Release", build: false, restore: false, output: targetDirectory, verbosity: "minimal",
-            cancellationToken: cancellationToken);
-
-        string packagePath = Path.Combine(targetDirectory, $"{Constants.Library}.{version}.nupkg");
-        string apiKey = GetRequiredEnvironmentVariable("NUGET__TOKEN");
-        await _dotnetNuGetUtil.Push(packagePath, apiKey: apiKey, skipDuplicate: true, cancellationToken: cancellationToken);
     }
 
     private static string GetRequiredEnvironmentVariable(string name)
