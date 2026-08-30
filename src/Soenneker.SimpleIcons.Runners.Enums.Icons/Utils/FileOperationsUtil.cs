@@ -49,11 +49,14 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
 
     public async ValueTask Process(CancellationToken cancellationToken)
     {
-        string upstreamDirectory = await _gitUtil.CloneToTempDirectory(Constants.UpstreamRepositoryUrl, cancellationToken: cancellationToken);
-        string targetDirectory = await _gitUtil.CloneToTempDirectory($"https://github.com/soenneker/{Constants.TargetRepository}", cancellationToken: cancellationToken);
+        string? upstreamDirectory = null;
+        string? targetDirectory = null;
 
         try
         {
+            upstreamDirectory = await _gitUtil.CloneToTempDirectory(Constants.UpstreamRepositoryUrl, cancellationToken: cancellationToken);
+            targetDirectory = await _gitUtil.CloneToTempDirectory($"https://github.com/soenneker/{Constants.TargetRepository}", cancellationToken: cancellationToken);
+
             string upstreamCommit = (await _gitUtil.Run("rev-parse HEAD", upstreamDirectory, log: false, cancellationToken: cancellationToken))[0].Trim();
 
             string generatedEnum = await GenerateEnum(upstreamDirectory, cancellationToken);
@@ -82,8 +85,11 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         }
         finally
         {
-            await _directoryUtil.DeleteIfExists(upstreamDirectory, cancellationToken);
-            await _directoryUtil.DeleteIfExists(targetDirectory, cancellationToken);
+            if (upstreamDirectory is not null)
+                await _directoryUtil.DeleteIfExists(upstreamDirectory, cancellationToken);
+
+            if (targetDirectory is not null)
+                await _directoryUtil.DeleteIfExists(targetDirectory, cancellationToken);
         }
     }
 
