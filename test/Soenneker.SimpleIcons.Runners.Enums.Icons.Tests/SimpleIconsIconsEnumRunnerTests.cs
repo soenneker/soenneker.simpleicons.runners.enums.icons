@@ -23,7 +23,7 @@ public sealed class SimpleIconsIconsEnumRunnerTests : HostedUnitTest
     }
 
     [Test]
-    public async Task Enum_type_name_is_simple_icon_enum()
+    public async ValueTask Enum_type_name_is_simple_icon_enum()
     {
         await Assert.That(Constants.EnumTypeName).IsEqualTo("SimpleIconEnum");
         await Assert.That(Constants.EnumTypeName).IsNotEqualTo("SimpleIcon");
