@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Soenneker.SimpleIcons.Runners.Enums.Icons.Utils.Abstract;
 using Soenneker.Tests.HostedUnit;
+using System.Threading;
 
 namespace Soenneker.SimpleIcons.Runners.Enums.Icons.Tests;
 
@@ -23,7 +24,7 @@ public sealed class SimpleIconsIconsEnumRunnerTests : HostedUnitTest
     }
 
     [Test]
-    public async ValueTask Enum_type_name_is_simple_icon_enum()
+    public async ValueTask Enum_type_name_is_simple_icon_enum(CancellationToken cancellationToken)
     {
         await Assert.That(Constants.EnumTypeName).IsEqualTo("SimpleIconEnum");
         await Assert.That(Constants.EnumTypeName).IsNotEqualTo("SimpleIcon");
